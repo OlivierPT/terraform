@@ -1,0 +1,28 @@
+{
+  "name": "hello-lambda",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MPL-2.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "compile": "tsc --pretty",
+    "watch": "tsc -w",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "zip": "npm run build && npm-build-zip --source=dist"
+  },
+  "devDependencies": {
+    "@types/jest": "^27.0.3",
+    "@types/node": "^16.11.12",
+    "jest": "^27.4.3",
+    "npm-build-zip": "^1.0.3",
+    "ts-jest": "^27.1.1",
+    "ts-node": "^10.4.0",
+    "typescript": "^4.5.2"
+  },
+  "dependencies": {
+    "@types/aws-lambda": "^8.10.86"
+  }
+}
