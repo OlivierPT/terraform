@@ -26,9 +26,11 @@ class LambdaStack extends TerraformStack {
       region: "eu-west-1",
     });
 
+    const dataCallerIdentity = new aws.datasources.DataAwsCallerIdentity(this, 'caller-identity')
+
     // Create unique S3 bucket that hosts deployment assets
     const bucket = new aws.s3.S3Bucket(this, "bucket", {
-      bucket: `s3-deployments-${'accountid-opt'}-${provider.region}`,
+      bucket: `s3-deployments-${dataCallerIdentity.accountId}-${provider.region}`,
 
     });
 
