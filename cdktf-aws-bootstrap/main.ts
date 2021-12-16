@@ -17,6 +17,9 @@ class BootstrapStack extends TerraformStack {
     // Create unique S3 bucket that hosts deployment assets
     new aws.s3.S3Bucket(this, "bucket", {
       bucket: `s3-deployments-${dataCallerIdentity.accountId}-${provider.region}`,
+      versioning: {
+        enabled: true,
+      }
     });
 
     new aws.dynamodb.DynamodbTable(this, "table", {
