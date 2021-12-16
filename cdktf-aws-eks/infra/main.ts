@@ -38,8 +38,6 @@ class EksStack extends TerraformStack {
       region: REGION,
     });
 
-    // const dataCallerIdentity = new aws.datasources.DataAwsCallerIdentity(this, 'caller-identity')
-
     new S3Backend(this, {
       bucket: 's3-deployments-061161181198-eu-west-1',
       key: `trfstate/${name}/${REGION}`,
@@ -56,18 +54,26 @@ class EksStack extends TerraformStack {
       publicSubnets: ['10.0.101.0/24', '10.0.102.0/24', '10.0.103.0/24'],
       enableNatGateway: true,
       publicSubnetTags: {
-        'usage': 'eks'
+        'usage': 'eks',
+        'type': 'public'
       },
       privateSubnetTags: {
-        'usage': 'eks'
+        'usage': 'eks',
+        'type': 'private'
       }
     })
 
     const subnetIds = new aws.vpc.DataAwsSubnetIds(this, 'subnets-ids', {
+      dependsOn: [vpc],
       vpcId: vpc.vpcIdOutput,
-      // tags: {
-      //   'usage': 'eks'
-      // }
+    })
+
+    const pivrateSubnetIds = new aws.vpc.DataAwsSubnetIds(this, 'private-subnets-ids', {
+      dependsOn: [vpc],
+      vpcId: vpc.vpcIdOutput,
+      tags: {
+        'type': 'private'
+      }
     })
 
     // AWS EKS Cluster Role
@@ -79,7 +85,7 @@ class EksStack extends TerraformStack {
       ]
     })
 
-    new aws.eks.EksCluster(this, 'eks-cluster', {
+    const eksCluster = new aws.eks.EksCluster(this, 'eks-cluster', {
       dependsOn: [vpc],
       name: 'test-cluster',
       roleArn: eksRole.arn,
@@ -90,12 +96,22 @@ class EksStack extends TerraformStack {
     })
 
     // AWS EKS Pod execution role
-    new aws.iam.IamRole(this, 'eks-pods-execution-role', {
+    const podExecutionRole = new aws.iam.IamRole(this, 'eks-pods-execution-role', {
       name: 'role-eks-pods-execution',
       assumeRolePolicy: JSON.stringify(EKS_PODS_EXECUTION_ASSUME_ROLE_POLICY),
       managedPolicyArns: [
         'arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy'
       ]
+    })
+
+    new aws.eks.EksFargateProfile(this, 'main-fargate-profile', {
+      clusterName: eksCluster.name,
+      fargateProfileName: 'main',
+      podExecutionRoleArn: podExecutionRole.arn,
+      subnetIds: pivrateSubnetIds.ids,
+      selector: [{
+        namespace: 'default'
+      }]
     })
   }
 }
