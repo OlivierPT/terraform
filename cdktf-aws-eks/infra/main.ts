@@ -1,5 +1,5 @@
 import { Construct } from "constructs";
-import { App, TerraformStack, S3Backend } from "cdktf";
+import { App, Fn, TerraformStack, S3Backend, TerraformOutput } from "cdktf";
 import * as aws from "@cdktf/provider-aws";
 import { Vpc } from './.gen/modules/vpc';
 
@@ -53,6 +53,7 @@ class EksStack extends TerraformStack {
       privateSubnets: ['10.0.1.0/24', '10.0.2.0/24', '10.0.3.0/24'],
       publicSubnets: ['10.0.101.0/24', '10.0.102.0/24', '10.0.103.0/24'],
       enableNatGateway: true,
+      singleNatGateway: true,
       publicSubnetTags: {
         'usage': 'eks',
         'type': 'public'
@@ -95,6 +96,14 @@ class EksStack extends TerraformStack {
       enabledClusterLogTypes: ["api", "audit", "authenticator", "controllerManager", "scheduler"]
     })
 
+    // Create OIDC provider for the cluster
+    new aws.iam.IamOpenidConnectProvider(this, 'iam-eks-oidc', {
+      dependsOn: [eksCluster],
+      url: Fn.lookup(Fn.one(eksCluster.identity('0').oidc), 'issuer', 'https://no_found'),
+      clientIdList: ['sts.amazonaws.com'],
+      thumbprintList: [Fn.sha1(eksCluster.certificateAuthority('0').data)]
+    })
+
     // AWS EKS Pod execution role
     const podExecutionRole = new aws.iam.IamRole(this, 'eks-pods-execution-role', {
       name: 'role-eks-pods-execution',
@@ -102,7 +111,7 @@ class EksStack extends TerraformStack {
       managedPolicyArns: [
         'arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy'
       ]
-    })
+    }) 
 
     new aws.eks.EksFargateProfile(this, 'main-fargate-profile', {
       clusterName: eksCluster.name,
@@ -111,8 +120,20 @@ class EksStack extends TerraformStack {
       subnetIds: pivrateSubnetIds.ids,
       selector: [{
         namespace: 'default'
-      }]
+      },
+      {
+        namespace: 'kube-system'
+      }],
     })
+
+    new TerraformOutput(this, 'cluster-oidc-issuer', {
+      value: Fn.lookup(Fn.one(eksCluster.identity('0').oidc), 'issuer', 'https://no_found')
+    })
+
+    new TerraformOutput(this, 'cluster-certificate', {
+      value: Fn.sha1(eksCluster.certificateAuthority('0').data)
+    })
+
   }
 }
 
