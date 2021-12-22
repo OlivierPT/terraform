@@ -24,7 +24,8 @@
     "cdktf": "^0.8.3",
     "cdktf-cli": "^0.8.3",
     "constructs": "^10.0.12",
-    "flatted": "^3.2.4"
+    "flatted": "^3.2.4",
+    "path": "^0.12.7"
   },
   "devDependencies": {
     "@types/jest": "^27.0.3",

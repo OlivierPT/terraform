@@ -1,9 +1,16 @@
 import { Construct } from "constructs";
-import { App, Fn, TerraformStack, S3Backend, TerraformOutput } from "cdktf";
+import { App, Fn, TerraformStack, S3Backend, TerraformOutput,  } from "cdktf";
 import * as aws from "@cdktf/provider-aws";
+
 import { Vpc } from './.gen/modules/vpc';
+import * as tls from  './.gen/providers/tls';
+
+import { clusterConfig } from '../config/cluster'
+import { INGRESS_CONTROLER_POLICY } from "./iam_policy";
 
 const REGION = 'eu-west-1'
+const CLUSTER_NAME = 'test-cluster';
+
 const EKS_ASSUME_ROLE_POLICY = {
   "Version": "2012-10-17",
   "Statement": [
@@ -17,7 +24,20 @@ const EKS_ASSUME_ROLE_POLICY = {
   ]
 }
 
-const EKS_PODS_EXECUTION_ASSUME_ROLE_POLICY = {
+const EKS_EC2_PODS_EXECUTION_ASSUME_ROLE_POLICY = {
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "ec2.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+
+const EKS_FARGATE_PODS_EXECUTION_ASSUME_ROLE_POLICY = {
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -29,6 +49,29 @@ const EKS_PODS_EXECUTION_ASSUME_ROLE_POLICY = {
     }
   ]
 }
+const PUT_CW_METRICS_POLICY = {
+  "Version": "2012-10-17",
+  "Statement": [
+      {
+          "Action": [
+              "cloudwatch:PutMetricData"
+          ],
+          "Resource": "*",
+          "Effect": "Allow"
+      }
+  ]
+}
+
+const STS_ALLOW_POLICY = {
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Resource": "*"
+    }
+  ]
+}
 
 class EksStack extends TerraformStack {
   constructor(scope: Construct, name: string) {
@@ -37,6 +80,8 @@ class EksStack extends TerraformStack {
     new aws.AwsProvider(this, "aws", {
       region: REGION,
     });
+
+    new tls.TlsProvider(this, "tls")
 
     new S3Backend(this, {
       bucket: 's3-deployments-061161181198-eu-west-1',
@@ -56,11 +101,15 @@ class EksStack extends TerraformStack {
       singleNatGateway: true,
       publicSubnetTags: {
         'usage': 'eks',
-        'type': 'public'
+        'type': 'public',
+        [`kubernetes.io/cluster/${CLUSTER_NAME}`]: 'shared',
+        'kubernetes.io/role/elb': '1'
       },
       privateSubnetTags: {
         'usage': 'eks',
-        'type': 'private'
+        'type': 'private',
+        [`kubernetes.io/cluster/${CLUSTER_NAME}`]: 'shared',
+        'kubernetes.io/role/internal-elb': '1'
       }
     })
 
@@ -82,7 +131,14 @@ class EksStack extends TerraformStack {
       name: 'role-eks-cluster',
       assumeRolePolicy: JSON.stringify(EKS_ASSUME_ROLE_POLICY),
       managedPolicyArns: [
-        'arn:aws:iam::aws:policy/AmazonEKSClusterPolicy'
+        'arn:aws:iam::aws:policy/AmazonEKSClusterPolicy',
+        'arn:aws:iam::aws:policy/AmazonEKSVPCResourceController'
+      ],
+      inlinePolicy: [
+        {
+          name: 'AmazonEKSClusterCloudWatchMetricsPolicy',
+          policy: JSON.stringify(PUT_CW_METRICS_POLICY)
+        }
       ]
     })
 
@@ -96,44 +152,162 @@ class EksStack extends TerraformStack {
       enabledClusterLogTypes: ["api", "audit", "authenticator", "controllerManager", "scheduler"]
     })
 
+    const clusterCertificate = new tls.DataTlsCertificate(this, 'cluster-certificate', {
+      url: Fn.lookup(Fn.one(eksCluster.identity('0').oidc), 'issuer', 'https://no_found')
+    })
+
     // Create OIDC provider for the cluster
-    new aws.iam.IamOpenidConnectProvider(this, 'iam-eks-oidc', {
+    const clusterOidcProvider = new aws.iam.IamOpenidConnectProvider(this, 'iam-eks-oidc', {
       dependsOn: [eksCluster],
       url: Fn.lookup(Fn.one(eksCluster.identity('0').oidc), 'issuer', 'https://no_found'),
       clientIdList: ['sts.amazonaws.com'],
-      thumbprintList: [Fn.sha1(eksCluster.certificateAuthority('0').data)]
+      thumbprintList: [clusterCertificate.certificates('0').sha1Fingerprint]
     })
 
-    // AWS EKS Pod execution role
-    const podExecutionRole = new aws.iam.IamRole(this, 'eks-pods-execution-role', {
-      name: 'role-eks-pods-execution',
-      assumeRolePolicy: JSON.stringify(EKS_PODS_EXECUTION_ASSUME_ROLE_POLICY),
+
+
+    // AWS EKS Pod execution roles
+    const fargatePodsExecutionRole = new aws.iam.IamRole(this, 'fargate-pods-execution-role', {
+      name: 'role-eks-fargate-pods-execution',
+      assumeRolePolicy: JSON.stringify(EKS_FARGATE_PODS_EXECUTION_ASSUME_ROLE_POLICY),
       managedPolicyArns: [
-        'arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy'
+        'arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy',
+        'arn:aws:iam::aws:policy/AmazonEKSVPCResourceController',
+      ],
+      inlinePolicy: [
+        {
+          name: 'STSAllowPolicy',
+          policy: JSON.stringify(STS_ALLOW_POLICY)
+        }
       ]
-    }) 
+    })
 
-    new aws.eks.EksFargateProfile(this, 'main-fargate-profile', {
+    const ec2PodsExecutionRole = new aws.iam.IamRole(this, 'ec2-pods-execution-role', {
+      name: 'role-eks-ec2-pods-execution',
+      assumeRolePolicy: JSON.stringify(EKS_EC2_PODS_EXECUTION_ASSUME_ROLE_POLICY),
+      managedPolicyArns: [
+        'arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy',
+        'arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy',
+        'arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly'
+      ],
+      inlinePolicy: [
+        {
+          name: 'STSAllowPolicy',
+          policy: JSON.stringify(STS_ALLOW_POLICY)
+        }
+      ]
+    })
+
+    new aws.eks.EksNodeGroup(this, 'cluster-node-group', {
       clusterName: eksCluster.name,
-      fargateProfileName: 'main',
-      podExecutionRoleArn: podExecutionRole.arn,
+      nodeRoleArn: ec2PodsExecutionRole.arn,
+      nodeGroupName: 'cluster-node-group',
       subnetIds: pivrateSubnetIds.ids,
-      selector: [{
-        namespace: 'default'
+      scalingConfig: {
+        desiredSize: 2,
+        maxSize: 2,
+        minSize: 2
       },
-      {
-        namespace: 'kube-system'
-      }],
+      instanceTypes: ['m6g.medium'],
+      amiType: 'BOTTLEROCKET_ARM_64'
     })
 
-    new TerraformOutput(this, 'cluster-oidc-issuer', {
-      value: Fn.lookup(Fn.one(eksCluster.identity('0').oidc), 'issuer', 'https://no_found')
+    // AWS Load balancer role for SA
+    const albSaAssumeRolePolicy = new aws.iam.DataAwsIamPolicyDocument(this, `assume-role-policy-alb-sa`, {
+      statement: [{
+        actions: [
+          "sts:AssumeRoleWithWebIdentity"
+        ],
+        effect: "Allow",
+        principals: [
+          {
+            identifiers: [clusterOidcProvider.arn],
+            type: 'Federated'
+          }
+        ],
+        condition: [{
+          test: "StringEquals",
+          variable: `${Fn.replace(clusterOidcProvider.url, "https://", "")}:sub`,
+          values: [`system:serviceaccount:$kube-system:aws-load-balancer-controller-sa`]
+        }]
+      }]
     })
 
-    new TerraformOutput(this, 'cluster-certificate', {
-      value: Fn.sha1(eksCluster.certificateAuthority('0').data)
+    new aws.iam.IamRole(this, `role-aws-load-balancer-controller-sa`, {
+      name: `role-aws-load-balancer-controller-sa`,
+      assumeRolePolicy: albSaAssumeRolePolicy.json,
+      inlinePolicy: [
+        {
+          name: 'IngressControlerPolicy',
+          policy: JSON.stringify(INGRESS_CONTROLER_POLICY)
+        }
+      ]
+
     })
 
+    // Create 1 Fargate profile and role per Application
+    clusterConfig.applications.map(app => {
+
+      new aws.eks.EksFargateProfile(this, `fargate-profile-${app}`, {
+        clusterName: eksCluster.name,
+        fargateProfileName: `${app}-profile`,
+        podExecutionRoleArn: fargatePodsExecutionRole.arn,
+        subnetIds: pivrateSubnetIds.ids,
+        selector: [
+          {
+            namespace: `${app}-ns`
+          }
+        ],
+      })
+  
+      // AWS EKS Cluster Role
+      const eksSaAssumeRolePolicy = new aws.iam.DataAwsIamPolicyDocument(this, `assume-role-policy-${app}-sa`, {
+        statement: [{
+          actions: [
+            "sts:AssumeRoleWithWebIdentity"
+          ],
+          effect: "Allow",
+          principals: [
+            {
+              identifiers: [clusterOidcProvider.arn],
+              type: 'Federated'
+            }
+          ],
+          condition: [{
+            test: "StringEquals",
+            variable: `${Fn.replace(clusterOidcProvider.url, "https://", "")}:sub`,
+            values: [`system:serviceaccount:${app}-ns:${app}-sa`]
+          }]
+        }]
+      })
+  
+      new aws.iam.IamRole(this, `role-${app}-sa`, {
+        name: `role-${app}-sa`,
+        assumeRolePolicy: eksSaAssumeRolePolicy.json,
+        inlinePolicy: [
+          {
+            name: 'IngressControlerPolicy',
+            policy: JSON.stringify(INGRESS_CONTROLER_POLICY)
+          }
+        ]
+  
+      })
+
+    })
+
+
+    new TerraformOutput(this, 'cluster-endpoint', {
+      value: eksCluster.endpoint
+    })
+
+    new TerraformOutput(this, 'cluster-arn', {
+      value: eksCluster.arn
+    })
+
+    new TerraformOutput(this, 'cluster-id', {
+      value: eksCluster.id
+    })
+    
   }
 }
 

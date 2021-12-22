@@ -2,7 +2,9 @@
   "language": "typescript",
   "app": "npx ts-node main.ts",
   "projectId": "359aea1b-cd26-4a99-b195-b7ab5af7649d",
-  "terraformProviders": [],
+  "terraformProviders": [
+    "hashicorp/tls@~> 3.1.0"
+  ],
   "terraformModules": [
     {
       "name": "vpc",
