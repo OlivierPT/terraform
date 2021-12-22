@@ -1,9 +1,10 @@
 import { Construct } from "constructs";
-import { App, Fn, TerraformStack, S3Backend, TerraformOutput,  } from "cdktf";
+import { App, Fn, TerraformStack, S3Backend, TerraformOutput } from "cdktf";
 import * as aws from "@cdktf/provider-aws";
+import * as k8s from "@cdktf/provider-kubernetes"
 
 import { Vpc } from './.gen/modules/vpc';
-import * as tls from  './.gen/providers/tls';
+import * as tls from './.gen/providers/tls';
 
 import { clusterConfig } from '../config/cluster'
 import { INGRESS_CONTROLER_POLICY } from "./iam_policy";
@@ -52,13 +53,13 @@ const EKS_FARGATE_PODS_EXECUTION_ASSUME_ROLE_POLICY = {
 const PUT_CW_METRICS_POLICY = {
   "Version": "2012-10-17",
   "Statement": [
-      {
-          "Action": [
-              "cloudwatch:PutMetricData"
-          ],
-          "Resource": "*",
-          "Effect": "Allow"
-      }
+    {
+      "Action": [
+        "cloudwatch:PutMetricData"
+      ],
+      "Resource": "*",
+      "Effect": "Allow"
+    }
   ]
 }
 
@@ -73,7 +74,7 @@ const STS_ALLOW_POLICY = {
   ]
 }
 
-class EksStack extends TerraformStack {
+class EksInfraStack extends TerraformStack {
   constructor(scope: Construct, name: string) {
     super(scope, name);
 
@@ -228,7 +229,7 @@ class EksStack extends TerraformStack {
         condition: [{
           test: "StringEquals",
           variable: `${Fn.replace(clusterOidcProvider.url, "https://", "")}:sub`,
-          values: [`system:serviceaccount:$kube-system:aws-load-balancer-controller-sa`]
+          values: [`system:serviceaccount:kube-system:aws-load-balancer-controller-sa`]
         }]
       }]
     })
@@ -259,7 +260,7 @@ class EksStack extends TerraformStack {
           }
         ],
       })
-  
+
       // AWS EKS Cluster Role
       const eksSaAssumeRolePolicy = new aws.iam.DataAwsIamPolicyDocument(this, `assume-role-policy-${app}-sa`, {
         statement: [{
@@ -280,7 +281,7 @@ class EksStack extends TerraformStack {
           }]
         }]
       })
-  
+
       new aws.iam.IamRole(this, `role-${app}-sa`, {
         name: `role-${app}-sa`,
         assumeRolePolicy: eksSaAssumeRolePolicy.json,
@@ -290,11 +291,10 @@ class EksStack extends TerraformStack {
             policy: JSON.stringify(INGRESS_CONTROLER_POLICY)
           }
         ]
-  
+
       })
 
     })
-
 
     new TerraformOutput(this, 'cluster-endpoint', {
       value: eksCluster.endpoint
@@ -307,11 +307,58 @@ class EksStack extends TerraformStack {
     new TerraformOutput(this, 'cluster-id', {
       value: eksCluster.id
     })
-    
+
+  }
+}
+
+class EksNamespacesStack extends TerraformStack {
+
+  constructor(scope: Construct, name: string) {
+    super(scope, name);
+
+    new aws.AwsProvider(this, "aws", {
+      region: REGION,
+    });
+
+    const eksCluster = new aws.eks.DataAwsEksCluster(this, 'data-eks-cluster', {
+      name: CLUSTER_NAME
+    })
+
+    const eksClusterAuth = new aws.eks.DataAwsEksClusterAuth(this, 'data-eks-auth', {
+      name: CLUSTER_NAME
+    })
+
+    new k8s.KubernetesProvider(this, 'k8s-provider', {
+      host: eksCluster.endpoint,
+      clusterCaCertificate: Fn.base64decode(eksCluster.certificateAuthority('0').data),
+      token: eksClusterAuth.token,
+    })
+
+    new S3Backend(this, {
+      bucket: 's3-deployments-061161181198-eu-west-1',
+      key: `trfstate/${name}/${REGION}`,
+      region: REGION,
+      dynamodbTable: 'tf-state-lock'
+
+    })
+
+    // Create 1 Fargate Namespace per Application
+    clusterConfig.applications.map(app => {
+      new k8s.DataKubernetesNamespace(this, `namespace-${app}`, {
+        metadata: {
+          name: `${app}-ns`,
+        }
+      })
+    })
+
   }
 }
 
 const app = new App();
 
-new EksStack(app, "aws-eks-infra");
+const infraStack = new EksInfraStack(app, "aws-eks-infra");
+const namespacesStack = new EksNamespacesStack(app, "aws-eks-namespaces");
+
+namespacesStack.node.addDependency(infraStack);
+
 app.synth();

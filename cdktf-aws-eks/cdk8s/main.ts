@@ -1,10 +1,17 @@
 import { Construct } from 'constructs';
 import * as kplus from 'cdk8s-plus-22';
 import { App, Chart, ChartProps, Helm } from 'cdk8s';
+import * as kube from './imports/k8s';
 
 export class NginxChart extends Chart {
   constructor(scope: Construct, id: string, props: ChartProps = {}) {
     super(scope, id, props);
+
+    // new kube.KubeNamespace(this, 'nginx-ns', {
+    //   metadata: {
+    //     name: 'nginx-ns'
+    //   }
+    // })
 
     const sa = new kplus.ServiceAccount(this, 'nginx-sa', {
       metadata: {
@@ -68,6 +75,12 @@ export class NginxChart extends Chart {
 export class OwnCloudChart extends Chart {
   constructor(scope: Construct, id: string, props: ChartProps = {}) {
     super(scope, id, props);
+
+    // new kube.KubeNamespace(this, 'owncloud-ns', {
+    //   metadata: {
+    //     name: 'owncloud-ns'
+    //   }
+    // })
 
     const sa = new kplus.ServiceAccount(this, 'owncloud-sa', {
       metadata: {
