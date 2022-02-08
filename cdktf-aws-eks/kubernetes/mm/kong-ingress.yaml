@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: proxy-from-k8s-to-nginx
+  annotations:
+    konghq.com/strip-path: "true"
+spec:
+  ingressClassName: kong
+  rules:
+  - http:
+      paths:
+      - path: /nginx
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: nginx-service
+            port:
+              number: 8090
+      - path: /wm
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: wiremock-service
+            port:
+              number: 9001

@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: wiremock
+  name: wiremock-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiremock
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: wiremock
+    spec:
+      containers:
+        - args:
+            - --local-response-templating
+            - --enable-stub-cors
+            - --verbose
+          image: rodolpheche/wiremock
+          name: wiremock
+          ports:
+            - containerPort: 8080
+          resources: {}
+          volumeMounts:
+            - mountPath: /home/wiremock
+              name: wiremock-claim0
+      restartPolicy: Always
+      volumes:
+        - name: wiremock-claim0
+          persistentVolumeClaim:
+            claimName: wiremock-claim0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: wiremock
+  name: wiremock-service
+spec:
+  ports:
+    - name: "9001"
+      port: 9001
+      targetPort: 8080
+  selector:
+    app: wiremock
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  creationTimestamp: null
+  labels:
+    app: wiremock-claim0
+  name: wiremock-claim0
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+status: {}

@@ -13,7 +13,6 @@ spec:
       labels:
         run: nginx
     spec:
-      serviceAccountName: app-default-sa
       containers:
       - name: nginx
         image: nginx
@@ -23,7 +22,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: service-nginx
+  name: nginx-service
   labels:
     run: nginx
   annotations:
@@ -32,9 +31,8 @@ metadata:
     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
 spec:
   type: LoadBalancer
-  # ingressClassName: nginx
   ports:
-    - port: 80
+    - port: 8090
       targetPort: 80
       protocol: TCP
   selector:
